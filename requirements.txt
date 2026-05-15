@@ -1,5 +1,4 @@
 # requirements.txt
-# Dépendances du projet Random Forest — Parallélisation sur CPU
 # Python >= 3.10 requis
 #
 # Installation : pip install -r requirements.txt
