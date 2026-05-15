@@ -1,0 +1,30 @@
+# requirements.txt
+# Dépendances du projet Random Forest — Parallélisation sur CPU
+# Python >= 3.10 requis
+#
+# Installation : pip install -r requirements.txt
+
+# Compilation Cython (rf_cython.pyx → .so)
+Cython>=3.0.0
+
+# Calcul numérique et tableaux contiguës en mémoire
+numpy>=1.24.0
+
+# Parallélisation par processus (backend Loky)
+joblib>=1.3.0
+
+# Référence industrielle (Random Forest sklearn)
+scikit-learn>=1.3.0
+
+# Manipulation de données et affichage des résultats
+pandas>=2.0.0
+
+# Visualisation des benchmarks (courbes, boxplots)
+matplotlib>=3.7.0
+
+# Chargement du dataset Heart Disease UCI (optionnel)
+# Si non disponible, le notebook utilise une URL directe en fallback
+ucimlrepo>=0.0.3
+
+# Exécution du notebook Jupyter
+notebook>=7.0.0
