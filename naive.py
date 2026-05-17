@@ -1,13 +1,15 @@
 """
 naive.py
 --------
-Implémentation NAÏVE d'une Random Forest entièrement en Python pur.
-Aucune parallélisation : les arbres sont construits un par un, séquentiellement.
+Implémentation NAÏVE d'une Random Forest en Python pur.
 
-Concepts du cours illustrés :
-  - Pas d'exploitation des cœurs disponibles (un seul thread actif)
-  - Coût O(n_arbres × n_samples × n_features × profondeur)
-  - Point de référence pour mesurer le gain apporté par la parallélisation
+Deux classes sont disponibles :
+  - RandomForestClassifieurNaif  : classification (vote majoritaire, critère Gini)
+  - RandomForestRegresseurNaif   : régression     (moyenne des feuilles, critère MSE)
+
+Aucune parallélisation, aucune dépendance NumPy :
+tout repose sur des listes Python et des boucles for.
+C'est le point de référence pour mesurer le gain de la version Cython.
 """
 
 import math
@@ -16,224 +18,344 @@ import time
 from collections import Counter
 
 
-# ---------------------------------------------------------------------------
-# Nœud d'un arbre de décision
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# Structure commune : un nœud d'arbre
+# ===========================================================================
 
 class Noeud:
-    """Représente un nœud interne ou une feuille d'un arbre de décision."""
-
+    """
+    Nœud d'un arbre de décision.
+    Utilisé à la fois pour la classification et la régression.
+    """
     def __init__(self):
-        self.est_feuille = False
-        self.classe = None          # Valeur prédite si feuille
-        self.feature_idx = None     # Indice de la feature utilisée pour la coupure
-        self.seuil = None           # Valeur seuil de la coupure
-        self.gauche = None          # Sous-arbre gauche  (feature <= seuil)
-        self.droite = None          # Sous-arbre droit   (feature >  seuil)
+        self.est_feuille    = False
+        self.valeur         = None   # classe majoritaire (classif) ou moyenne (regress)
+        self.feature_idx    = None   # indice de la feature de coupure
+        self.seuil          = None   # valeur du seuil de coupure
+        self.gauche         = None   # sous-arbre gauche  (feature <= seuil)
+        self.droite         = None   # sous-arbre droit   (feature >  seuil)
 
 
-# ---------------------------------------------------------------------------
-# Fonctions utilitaires
-# ---------------------------------------------------------------------------
-
-def _impurete_gini(y):
-    """Calcule l'impureté de Gini d'un vecteur d'étiquettes (liste Python)."""
-    n = len(y)
-    if n == 0:
-        return 0.0
-    compteur = Counter(y)
-    # Gini = 1 - sum(p_k^2)
-    gini = 1.0 - sum((c / n) ** 2 for c in compteur.values())
-    return gini
-
-
-def _meilleure_coupure(X, y, indices_features):
-    """
-    Cherche la meilleure coupure parmi un sous-ensemble de features.
-    Parcours naïf : on teste tous les seuils possibles pour chaque feature.
-
-    Retourne (feature_idx, seuil) ou (None, None) si aucune coupure utile.
-    """
-    n = len(y)
-    meilleur_gain = -1.0
-    meilleur_feat = None
-    meilleur_seuil = None
-    gini_parent = _impurete_gini(y)
-
-    for feat_idx in indices_features:
-        # Récupération des valeurs de la feature pour tous les exemples
-        valeurs = [X[i][feat_idx] for i in range(n)]
-        seuils_candidats = sorted(set(valeurs))
-
-        for seuil in seuils_candidats:
-            y_gauche = [y[i] for i in range(n) if X[i][feat_idx] <= seuil]
-            y_droite = [y[i] for i in range(n) if X[i][feat_idx] > seuil]
-
-            if len(y_gauche) == 0 or len(y_droite) == 0:
-                continue
-
-            # Gain d'information = Gini parent - moyenne pondérée des enfants
-            gain = gini_parent - (
-                (len(y_gauche) / n) * _impurete_gini(y_gauche)
-                + (len(y_droite) / n) * _impurete_gini(y_droite)
-            )
-
-            if gain > meilleur_gain:
-                meilleur_gain = gain
-                meilleur_feat = feat_idx
-                meilleur_seuil = seuil
-
-    return meilleur_feat, meilleur_seuil
-
-
-def _construire_arbre(X, y, profondeur_max, n_features_par_split, profondeur=0):
-    """
-    Construit récursivement un arbre de décision.
-
-    Paramètres
-    ----------
-    X                  : liste de listes (n_samples × n_features)
-    y                  : liste d'étiquettes (n_samples,)
-    profondeur_max     : profondeur maximale de l'arbre
-    n_features_par_split : nombre de features tirées aléatoirement à chaque nœud
-    profondeur         : profondeur courante (pour la récursion)
-    """
-    noeud = Noeud()
-    classe_majoritaire = Counter(y).most_common(1)[0][0]
-
-    # Critères d'arrêt
-    if (profondeur >= profondeur_max
-            or len(set(y)) == 1
-            or len(y) <= 1):
-        noeud.est_feuille = True
-        noeud.classe = classe_majoritaire
-        return noeud
-
-    # Tirage aléatoire d'un sous-ensemble de features (Random Forest)
-    n_features_total = len(X[0])
-    k = min(n_features_par_split, n_features_total)
-    indices_features = random.sample(range(n_features_total), k)
-
-    feat_idx, seuil = _meilleure_coupure(X, y, indices_features)
-
-    # Aucune coupure utile → feuille
-    if feat_idx is None:
-        noeud.est_feuille = True
-        noeud.classe = classe_majoritaire
-        return noeud
-
-    # Partition des données
-    X_g = [X[i] for i in range(len(y)) if X[i][feat_idx] <= seuil]
-    y_g = [y[i] for i in range(len(y)) if X[i][feat_idx] <= seuil]
-    X_d = [X[i] for i in range(len(y)) if X[i][feat_idx] > seuil]
-    y_d = [y[i] for i in range(len(y)) if X[i][feat_idx] > seuil]
-
-    noeud.feature_idx = feat_idx
-    noeud.seuil = seuil
-
-    # Récursion sur les deux branches
-    noeud.gauche = _construire_arbre(X_g, y_g, profondeur_max,
-                                      n_features_par_split, profondeur + 1)
-    noeud.droite = _construire_arbre(X_d, y_d, profondeur_max,
-                                      n_features_par_split, profondeur + 1)
-    return noeud
-
+# ===========================================================================
+# Fonctions utilitaires partagées
+# ===========================================================================
 
 def _predire_un_exemple(noeud, x):
-    """Descend dans l'arbre pour prédire la classe d'un exemple x."""
+    """Fait descendre l'exemple x dans l'arbre et retourne la valeur de la feuille."""
     if noeud.est_feuille:
-        return noeud.classe
+        return noeud.valeur
     if x[noeud.feature_idx] <= noeud.seuil:
         return _predire_un_exemple(noeud.gauche, x)
     else:
         return _predire_un_exemple(noeud.droite, x)
 
 
-# ---------------------------------------------------------------------------
-# Random Forest naïve (séquentielle)
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# CLASSIFICATION — fonctions internes
+# ===========================================================================
 
-class RandomForestNaive:
+def _gini(y):
     """
-    Random Forest NAÏVE : les n_arbres sont entraînés les uns après les autres
-    dans une simple boucle for. Aucun parallélisme.
+    Impureté de Gini d'une liste d'étiquettes.
+    Gini = 1 - sum(p_k^2)  → 0 si nœud pur, ~0.5 si nœud impur.
+    """
+    n = len(y)
+    if n == 0:
+        return 0.0
+    compteur = Counter(y)
+    return 1.0 - sum((c / n) ** 2 for c in compteur.values())
 
-    Méthodes du cours non appliquées :
-      - Pas de joblib / concurrent.futures
-      - Pas de partage mémoire optimisé
-      - Structures de données Python pures (listes), pas NumPy
+
+def _meilleure_coupure_classif(X, y, indices_features):
+    """
+    Parcourt tous les seuils possibles pour chaque feature tirée,
+    et retourne la coupure qui maximise le gain de Gini.
+    """
+    n = len(y)
+    meilleur_gain  = -1.0
+    meilleur_feat  = None
+    meilleur_seuil = None
+    gini_parent    = _gini(y)
+
+    for feat_idx in indices_features:
+        valeurs           = [X[i][feat_idx] for i in range(n)]
+        seuils_candidats  = sorted(set(valeurs))
+
+        for seuil in seuils_candidats:
+            y_g = [y[i] for i in range(n) if X[i][feat_idx] <= seuil]
+            y_d = [y[i] for i in range(n) if X[i][feat_idx] >  seuil]
+
+            if not y_g or not y_d:
+                continue
+
+            gain = gini_parent - (
+                (len(y_g) / n) * _gini(y_g) +
+                (len(y_d) / n) * _gini(y_d)
+            )
+            if gain > meilleur_gain:
+                meilleur_gain  = gain
+                meilleur_feat  = feat_idx
+                meilleur_seuil = seuil
+
+    return meilleur_feat, meilleur_seuil
+
+
+def _construire_arbre_classif(X, y, profondeur_max, k, profondeur=0):
+    """Construction récursive d'un arbre de décision pour la classification."""
+    noeud = Noeud()
+    # Valeur de la feuille = classe la plus fréquente
+    noeud.valeur = Counter(y).most_common(1)[0][0]
+
+    # Critères d'arrêt
+    if profondeur >= profondeur_max or len(set(y)) == 1 or len(y) <= 1:
+        noeud.est_feuille = True
+        return noeud
+
+    # Tirage aléatoire d'un sous-ensemble de features
+    n_features = len(X[0])
+    indices_features = random.sample(range(n_features), min(k, n_features))
+
+    feat_idx, seuil = _meilleure_coupure_classif(X, y, indices_features)
+
+    if feat_idx is None:
+        noeud.est_feuille = True
+        return noeud
+
+    # Partition gauche / droite
+    X_g = [X[i] for i in range(len(y)) if X[i][feat_idx] <= seuil]
+    y_g = [y[i] for i in range(len(y)) if X[i][feat_idx] <= seuil]
+    X_d = [X[i] for i in range(len(y)) if X[i][feat_idx] >  seuil]
+    y_d = [y[i] for i in range(len(y)) if X[i][feat_idx] >  seuil]
+
+    noeud.feature_idx = feat_idx
+    noeud.seuil       = seuil
+    noeud.gauche      = _construire_arbre_classif(X_g, y_g, profondeur_max, k, profondeur + 1)
+    noeud.droite      = _construire_arbre_classif(X_d, y_d, profondeur_max, k, profondeur + 1)
+    return noeud
+
+
+# ===========================================================================
+# RÉGRESSION — fonctions internes
+# ===========================================================================
+
+def _mse(y):
+    """
+    Erreur quadratique moyenne (MSE) autour de la moyenne.
+    MSE = 0 si tous les y sont identiques.
+    """
+    n = len(y)
+    if n == 0:
+        return 0.0
+    moy = sum(y) / n
+    return sum((v - moy) ** 2 for v in y) / n
+
+
+def _meilleure_coupure_regress(X, y, indices_features):
+    """
+    Cherche la coupure qui minimise la MSE pondérée des deux enfants.
+    Critère : réduction de variance (MSE parent - MSE pondérée enfants).
+    """
+    n = len(y)
+    meilleur_gain  = -1.0
+    meilleur_feat  = None
+    meilleur_seuil = None
+    mse_parent     = _mse(y)
+
+    for feat_idx in indices_features:
+        valeurs          = [X[i][feat_idx] for i in range(n)]
+        seuils_candidats = sorted(set(valeurs))
+
+        for seuil in seuils_candidats:
+            y_g = [y[i] for i in range(n) if X[i][feat_idx] <= seuil]
+            y_d = [y[i] for i in range(n) if X[i][feat_idx] >  seuil]
+
+            if not y_g or not y_d:
+                continue
+
+            # Gain = réduction de MSE
+            gain = mse_parent - (
+                (len(y_g) / n) * _mse(y_g) +
+                (len(y_d) / n) * _mse(y_d)
+            )
+            if gain > meilleur_gain:
+                meilleur_gain  = gain
+                meilleur_feat  = feat_idx
+                meilleur_seuil = seuil
+
+    return meilleur_feat, meilleur_seuil
+
+
+def _construire_arbre_regress(X, y, profondeur_max, k, profondeur=0):
+    """Construction récursive d'un arbre de décision pour la régression."""
+    noeud = Noeud()
+    # Valeur de la feuille = moyenne des y
+    noeud.valeur = sum(y) / len(y)
+
+    # Critères d'arrêt
+    if profondeur >= profondeur_max or len(set(y)) == 1 or len(y) <= 1:
+        noeud.est_feuille = True
+        return noeud
+
+    n_features       = len(X[0])
+    indices_features = random.sample(range(n_features), min(k, n_features))
+
+    feat_idx, seuil = _meilleure_coupure_regress(X, y, indices_features)
+
+    if feat_idx is None:
+        noeud.est_feuille = True
+        return noeud
+
+    X_g = [X[i] for i in range(len(y)) if X[i][feat_idx] <= seuil]
+    y_g = [y[i] for i in range(len(y)) if X[i][feat_idx] <= seuil]
+    X_d = [X[i] for i in range(len(y)) if X[i][feat_idx] >  seuil]
+    y_d = [y[i] for i in range(len(y)) if X[i][feat_idx] >  seuil]
+
+    noeud.feature_idx = feat_idx
+    noeud.seuil       = seuil
+    noeud.gauche      = _construire_arbre_regress(X_g, y_g, profondeur_max, k, profondeur + 1)
+    noeud.droite      = _construire_arbre_regress(X_d, y_d, profondeur_max, k, profondeur + 1)
+    return noeud
+
+
+# ===========================================================================
+# Classe publique — Classification naïve
+# ===========================================================================
+
+class RandomForestClassifieurNaif:
+    """
+    Random Forest de CLASSIFICATION en Python pur.
+
+    Critère de coupure : impureté de Gini.
+    Agrégation          : vote majoritaire entre les T arbres.
+    Structures          : listes Python (pas NumPy).
+    Parallélisation     : aucune (boucle for séquentielle).
     """
 
-    def __init__(self, n_arbres=10, profondeur_max=5, n_features_par_split=None,
-                 graine=42):
-        self.n_arbres = n_arbres
-        self.profondeur_max = profondeur_max
-        self.n_features_par_split = n_features_par_split  # None → sqrt(n_features)
-        self.graine = graine
-        self.arbres_ = []  # Liste des arbres entraînés
+    def __init__(self, n_arbres=10, profondeur_max=5,
+                 n_features_par_split=None, graine=42):
+        self.n_arbres            = n_arbres
+        self.profondeur_max      = profondeur_max
+        self.n_features_par_split = n_features_par_split  # None → sqrt(p)
+        self.graine              = graine
+        self.arbres_             = []
 
     def fit(self, X, y):
         """
-        Entraîne la forêt sur (X, y).
-
-        X : liste de listes (n_samples × n_features)
-        y : liste d'étiquettes
+        Entraîne la forêt sur X (liste de listes) et y (liste d'entiers).
+        Chaque arbre est construit sur un bootstrap de X, y.
         """
         random.seed(self.graine)
-        n_samples = len(y)
-        n_features = len(X[0])
-
-        k = self.n_features_par_split or max(1, int(math.sqrt(n_features)))
+        n       = len(y)
+        p       = len(X[0])
+        k       = self.n_features_par_split or max(1, int(math.sqrt(p)))
         self.arbres_ = []
 
-        # Boucle SÉQUENTIELLE : c'est ici le goulot d'étranglement
         for _ in range(self.n_arbres):
-            # Bootstrap : tirage avec remise de n_samples indices
-            indices = [random.randint(0, n_samples - 1) for _ in range(n_samples)]
-            X_boot = [X[i] for i in indices]
-            y_boot = [y[i] for i in indices]
-
-            arbre = _construire_arbre(X_boot, y_boot, self.profondeur_max, k)
-            self.arbres_.append(arbre)
-
+            # Bootstrap : tirage avec remise
+            idx    = [random.randint(0, n - 1) for _ in range(n)]
+            X_boot = [X[i] for i in idx]
+            y_boot = [y[i] for i in idx]
+            self.arbres_.append(
+                _construire_arbre_classif(X_boot, y_boot, self.profondeur_max, k)
+            )
         return self
 
     def predict(self, X):
-        """
-        Prédit la classe pour chaque exemple de X par vote majoritaire.
-        Retourne une liste de prédictions.
-        """
+        """Retourne la classe prédite pour chaque exemple (vote majoritaire)."""
         predictions = []
         for x in X:
-            votes = [_predire_un_exemple(arbre, x) for arbre in self.arbres_]
-            classe = Counter(votes).most_common(1)[0][0]
-            predictions.append(classe)
+            votes = [_predire_un_exemple(a, x) for a in self.arbres_]
+            predictions.append(Counter(votes).most_common(1)[0][0])
         return predictions
 
     def score(self, X, y):
-        """Retourne la précision (accuracy) sur (X, y)."""
+        """Accuracy : proportion de prédictions correctes."""
         preds = self.predict(X)
-        correct = sum(p == vrai for p, vrai in zip(preds, y))
-        return correct / len(y)
+        return sum(p == v for p, v in zip(preds, y)) / len(y)
 
 
-# ---------------------------------------------------------------------------
-# Point d'entrée rapide pour tester le module seul
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# Classe publique — Régression naïve
+# ===========================================================================
+
+class RandomForestRegresseurNaif:
+    """
+    Random Forest de RÉGRESSION en Python pur.
+
+    Critère de coupure : réduction de MSE (variance).
+    Agrégation          : moyenne des prédictions des T arbres.
+    Structures          : listes Python (pas NumPy).
+    Parallélisation     : aucune (boucle for séquentielle).
+    """
+
+    def __init__(self, n_arbres=10, profondeur_max=5,
+                 n_features_par_split=None, graine=42):
+        self.n_arbres            = n_arbres
+        self.profondeur_max      = profondeur_max
+        self.n_features_par_split = n_features_par_split  # None → p/3 (convention régression)
+        self.graine              = graine
+        self.arbres_             = []
+
+    def fit(self, X, y):
+        """
+        Entraîne la forêt sur X (liste de listes) et y (liste de floats).
+        """
+        random.seed(self.graine)
+        n       = len(y)
+        p       = len(X[0])
+        # Convention régression : p/3 features par nœud (comme sklearn)
+        k       = self.n_features_par_split or max(1, p // 3)
+        self.arbres_ = []
+
+        for _ in range(self.n_arbres):
+            idx    = [random.randint(0, n - 1) for _ in range(n)]
+            X_boot = [X[i] for i in idx]
+            y_boot = [y[i] for i in idx]
+            self.arbres_.append(
+                _construire_arbre_regress(X_boot, y_boot, self.profondeur_max, k)
+            )
+        return self
+
+    def predict(self, X):
+        """Retourne la moyenne des prédictions de chaque arbre."""
+        predictions = []
+        for x in X:
+            votes = [_predire_un_exemple(a, x) for a in self.arbres_]
+            predictions.append(sum(votes) / len(votes))
+        return predictions
+
+    def score(self, X, y):
+        """R² score : 1 − MSE / Var(y)."""
+        preds = self.predict(X)
+        y_moy = sum(y) / len(y)
+        ss_res = sum((p - v) ** 2 for p, v in zip(preds, y))
+        ss_tot = sum((v - y_moy) ** 2 for v in y)
+        return 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
+
+
+# ===========================================================================
+# Test rapide
+# ===========================================================================
 
 if __name__ == "__main__":
-    # Génération d'un petit jeu de données synthétique
     random.seed(0)
     n = 200
-    X_train = [[random.gauss(0, 1) for _ in range(6)] for _ in range(n)]
-    y_train = [1 if x[0] + x[1] > 0 else 0 for x in X_train]
 
-    print("=== Random Forest Naïve ===")
-    debut = time.perf_counter()
-    rf = RandomForestNaive(n_arbres=20, profondeur_max=5)
-    rf.fit(X_train, y_train)
-    duree = time.perf_counter() - debut
+    # --- Classification ---
+    X = [[random.gauss(0, 1) for _ in range(6)] for _ in range(n)]
+    y_c = [1 if x[0] + x[1] > 0 else 0 for x in X]
 
-    acc = rf.score(X_train, y_train)
-    print(f"  Temps d'entraînement : {duree:.3f} s")
-    print(f"  Accuracy sur train   : {acc:.3f}")
+    print("=== Classification naïve ===")
+    t0 = time.perf_counter()
+    clf = RandomForestClassifieurNaif(n_arbres=15, profondeur_max=5)
+    clf.fit(X, y_c)
+    print(f"  Temps : {time.perf_counter()-t0:.3f}s | Accuracy : {clf.score(X, y_c):.3f}")
+
+    # --- Régression ---
+    y_r = [x[0] * 2 + x[1] + random.gauss(0, 0.5) for x in X]
+
+    print("=== Régression naïve ===")
+    t0 = time.perf_counter()
+    reg = RandomForestRegresseurNaif(n_arbres=15, profondeur_max=5)
+    reg.fit(X, y_r)
+    print(f"  Temps : {time.perf_counter()-t0:.3f}s | R²     : {reg.score(X, y_r):.3f}")
