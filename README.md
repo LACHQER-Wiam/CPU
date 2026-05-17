@@ -10,30 +10,20 @@ L'objectif est d'implémenter un algorithme de Random Forest en plusieurs versio
 
 ```
 .
-├── naive.py                      # Version naïve (Python pur)
-├── optimised.py                  # Version parallélisée (joblib / concurrent.futures)
-├── rf_cython.pyx                 # Fonctions critiques compilées en C (Cython)
-├── setup.py                      # Script de compilation du module Cython
-├── optimised_cython.py           # Random Forest utilisant le module Cython
-├── benchmark_random_forest.ipynb # Notebook de comparaison des versions
-├── requirements.txt              # Dépendances Python du projet
-└── README.md                     # Ce fichier
+├── naive.py                  # Version naïve (Python pur)
+├── rf_cython.pyx             # Fonctions critiques compilées en C (Cython)
+├── setup.py                  # Script de compilation du module Cython
+├── optimised_cython.py       # Random Forest utilisant le module Cython
+├── benchmark_complet.ipynb   # Notebook de comparaison des versions
+├── requirements.txt          # Dépendances Python du projet
+└── README.md                 # Ce fichier
 ```
 
 ### `naive.py`
 
-Implémentation **séquentielle en Python pur** d'une Random Forest. Aucune parallélisation, aucune dépendance à NumPy : les données sont stockées dans des listes Python classiques. Ce fichier sert de référence de base pour mesurer les gains des versions optimisées. Il illustre le goulot d'étranglement de l'interpréteur Python sur des boucles intensives (calcul du Gini, recherche de coupure).
+Implémentation **séquentielle en Python pur** d'une Random Forest pour la classification et la régression. Aucune parallélisation, aucune dépendance à NumPy : les données sont stockées dans des listes Python classiques. Ce fichier sert de référence de base pour mesurer les gains des versions optimisées. Il illustre le goulot d'étranglement de l'interpréteur Python sur des boucles intensives (calcul du Gini, recherche de coupure).
 
-Classe exposée : `RandomForestNaive`
-
-### `optimised.py`
-
-Implémentation **parallélisée sur CPU** utilisant les deux approches vues en cours :
-
-- `RandomForestJoblib` : parallélisation via `joblib.Parallel` avec le backend `loky` (pool de processus persistant). Chaque arbre est entraîné dans un processus indépendant, ce qui contourne le GIL Python. Les données sont stockées en NumPy pour de meilleurs performances mémoire.
-- `RandomForestFutures` : même principe avec `concurrent.futures.ProcessPoolExecutor`, une API plus bas niveau qui permet de comprendre le mécanisme de soumission et de collecte des tâches.
-
-Les deux classes appliquent la stratégie de **tâches grossières** (un arbre entier par tâche) pour amortir le coût de communication entre processus (sérialisation pickle).
+Classes exposées : `RandomForestClassifieurNaif`, `RandomForestRegresseurNaif`
 
 ### `rf_cython.pyx`
 
@@ -50,20 +40,21 @@ Script de compilation du module Cython. Il utilise `setuptools` et `Cython.Build
 
 ### `optimised_cython.py`
 
-Random Forest qui **appelle le module Cython compilé** pour les fonctions critiques. Deux classes sont disponibles :
+Random Forest qui **appelle le module Cython compilé** pour les fonctions critiques, couvrant les tâches de classification et de régression :
 
-- `RandomForestCython` : version séquentielle avec les fonctions Cython. Permet d'isoler le gain apporté par la compilation C, indépendamment du parallélisme.
-- `RandomForestCythonParallel` : combine Cython et joblib — la meilleure version du projet. Chaque arbre est construit dans un processus séparé, et chaque processus utilise les fonctions C compilées pour les calculs.
+- `RandomForestClassifieurCython` : classifieur avec les fonctions Cython. Permet d'isoler le gain apporté par la compilation C, indépendamment du parallélisme.
+- `RandomForestRegresseurCython` : régresseur avec les fonctions Cython.
 
-### `benchmark_random_forest.ipynb`
+### `benchmark_complet.ipynb`
 
-Notebook Jupyter de comparaison des cinq versions sur le dataset **Heart Disease UCI** (303 lignes, 13 features, classification binaire). Il contient :
+Notebook Jupyter de comparaison des **3 versions** (Naïve, Cython, Sklearn) sur **4 datasets** couvrant classification et régression. Il contient :
 
 - La compilation automatique du module Cython au démarrage
-- Le chargement et la préparation du dataset
-- Un benchmark avec variation du nombre d'arbres (5, 10, 20, 40) sur plusieurs runs
-- Un tableau de speedups par rapport à la version naïve
-- Des graphiques : courbes de temps, barres de speedup, boxplots de variabilité
+- La visualisation des 4 datasets
+- Un benchmark sur 5 runs (20 arbres, profondeur 5) pour chaque dataset :
+  - **Classification** : Moons (synthétique, 600 points) et Breast Cancer (569 patients, 30 features)
+  - **Régression** : Sinusoïde bruitée (synthétique, 400 points) et California Housing (2 000 maisons, 8 features)
+- Des graphiques détaillés : frontières de décision, matrices de confusion, courbes prédites, scatter prédit vs réel, barres de temps, barres de speedup, boxplots de variabilité
 
 ---
 
@@ -82,19 +73,19 @@ Notebook Jupyter de comparaison des cinq versions sur le dataset **Heart Disease
 **1. Créer l'environnement virtuel**
 
 ```bash
-python -m venv env
+python -m venv venv
 ```
 
 **2. Activer l'environnement**
 
 Sur Linux / macOS :
 ```bash
-source env/bin/activate
+source venv/bin/activate
 ```
 
 Sur Windows :
 ```bash
-env\Scripts\activate
+venv\Scripts\activate
 ```
 
 
@@ -115,7 +106,7 @@ python setup.py build_ext --inplace
 **5. Lancer le notebook**
 
 ```bash
-jupyter notebook benchmark_random_forest.ipynb
+jupyter notebook benchmark_complet.ipynb
 ```
 
 
