@@ -1,7 +1,7 @@
 """
 optimised_cython.py
 --------------------
-Random Forest avec les fonctions critiques compilées en C (Cython).
+Random Forest avec des fonctions compilées en C (Cython)
 
 Deux classes sont disponibles :
   - RandomForestClassifieurCython  : classification (Gini compilé en C)
@@ -11,17 +11,17 @@ Prérequis : avoir compilé rf_cython.pyx avec
     python setup.py build_ext --inplace
 
 Différence avec naive.py :
-  - Les boucles de calcul Gini/MSE et la recherche de seuil tournent en C.
-  - Les données sont stockées en tableaux NumPy (mémoire contiguë).
-  - La structure de l'arbre (récursion, bootstrap) reste en Python.
+  - Les boucles de calcul Gini/MSE et la recherche de seuil tournent en C
+  - Les données sont stockées en tableaux NumPy
+  - La structure de l'arbre (récursion, bootstrap) est en Python
 """
 
 import math
 import time
 import numpy as np
 from collections import Counter
+from joblib import Parallel, delayed
 
-# Import du module Cython compilé
 import rf_cython
 
 
@@ -30,7 +30,7 @@ import rf_cython
 # ===========================================================================
 
 class Noeud:
-    """Nœud d'un arbre de décision (partagé entre classification et régression)."""
+    """Nœud d'un arbre de décision"""
     def __init__(self):
         self.est_feuille = False
         self.valeur      = None   # classe (classif) ou moyenne (regress)
@@ -45,7 +45,7 @@ class Noeud:
 # ===========================================================================
 
 def _predire_un_exemple(noeud, x):
-    """Descend dans l'arbre et retourne la valeur de la feuille."""
+    """Descend dans l'arbre et retourne la valeur de la feuille"""
     if noeud.est_feuille:
         return noeud.valeur
     if x[noeud.feature_idx] <= noeud.seuil:
@@ -60,7 +60,7 @@ def _predire_un_exemple(noeud, x):
 
 def _construire_arbre_classif(X, y, profondeur_max, k, profondeur=0):
     """
-    Construit un arbre de décision pour la classification.
+    Construit un arbre de décision pour la classification
     Appelle rf_cython.gini_cython et rf_cython.meilleure_coupure_classif.
 
     X : tableau NumPy float64 (n_samples × n_features)
@@ -169,44 +169,63 @@ def _construire_arbre_regress(X, y, profondeur_max, k, profondeur=0):
 
 
 # ===========================================================================
+# Helpers top-level pour joblib
+# ===========================================================================
+
+def _build_tree_classif(X_boot, y_boot, profondeur_max, k, seed):
+    np.random.seed(seed)
+    return _construire_arbre_classif(X_boot, y_boot, profondeur_max, k)
+
+
+def _build_tree_regress(X_boot, y_boot, profondeur_max, k, seed):
+    np.random.seed(seed)
+    return _construire_arbre_regress(X_boot, y_boot, profondeur_max, k)
+
+
+# ===========================================================================
 # Classe publique — Classification Cython
 # ===========================================================================
 
 class RandomForestClassifieurCython:
     """
-    Random Forest de CLASSIFICATION avec fonctions Cython.
+    Random Forest de classification avec fonctions Cython
 
-    Critère de coupure : Gini compilé en C (rf_cython.gini_cython).
-    Agrégation          : vote majoritaire entre les T arbres.
-    Structures          : tableaux NumPy (mémoire contiguë).
-    Parallélisation     : aucune — on isole le gain Cython pur.
+    Critère de coupure : Gini compilé en C (rf_cython.gini_cython)
+    Agrégation          : vote majoritaire entre les T arbres
+    Structures          : tableaux NumPy (mémoire contiguë)
+    Parallélisation     : aucune — on isole le gain Cython pur
     """
 
     def __init__(self, n_arbres=10, profondeur_max=5,
-                 n_features_par_split=None, graine=42):
+                 n_features_par_split=None, graine=42, n_jobs=-1):
         self.n_arbres            = n_arbres
         self.profondeur_max      = profondeur_max
         self.n_features_par_split = n_features_par_split
         self.graine              = graine
+        self.n_jobs              = n_jobs
         self.arbres_             = []
 
     def fit(self, X, y):
-        """Entraîne la forêt. X : NumPy float64, y : NumPy int64."""
+        """Entraîne la forêt. X : NumPy float64, y : NumPy int64"""
         X = np.ascontiguousarray(X, dtype=np.float64)
         y = np.ascontiguousarray(y, dtype=np.int64)
-        np.random.seed(self.graine)
+        rng = np.random.RandomState(self.graine)
 
         n, p = X.shape
         k = self.n_features_par_split or max(1, int(math.sqrt(p)))
-        self.arbres_ = []
 
+        bootstraps = []
         for _ in range(self.n_arbres):
-            idx    = np.random.randint(0, n, size=n)
+            idx    = rng.randint(0, n, size=n)
             X_boot = np.ascontiguousarray(X[idx])
             y_boot = np.ascontiguousarray(y[idx])
-            self.arbres_.append(
-                _construire_arbre_classif(X_boot, y_boot, self.profondeur_max, k)
-            )
+            seed   = int(rng.randint(0, 2**31))
+            bootstraps.append((X_boot, y_boot, seed))
+
+        self.arbres_ = Parallel(n_jobs=self.n_jobs, backend='loky')(
+            delayed(_build_tree_classif)(Xb, yb, self.profondeur_max, k, s)
+            for Xb, yb, s in bootstraps
+        )
         return self
 
     def predict(self, X):
@@ -230,7 +249,7 @@ class RandomForestClassifieurCython:
 
 class RandomForestRegresseurCython:
     """
-    Random Forest de RÉGRESSION avec fonctions Cython.
+    Random Forest de régression avec fonctions Cython
 
     Critère de coupure : réduction de MSE compilée en C (rf_cython.mse_cython).
     Agrégation          : moyenne des prédictions des T arbres.
@@ -239,30 +258,35 @@ class RandomForestRegresseurCython:
     """
 
     def __init__(self, n_arbres=10, profondeur_max=5,
-                 n_features_par_split=None, graine=42):
+                 n_features_par_split=None, graine=42, n_jobs=-1):
         self.n_arbres            = n_arbres
         self.profondeur_max      = profondeur_max
         self.n_features_par_split = n_features_par_split
         self.graine              = graine
+        self.n_jobs              = n_jobs
         self.arbres_             = []
 
     def fit(self, X, y):
         """Entraîne la forêt. X : NumPy float64, y : NumPy float64."""
         X = np.ascontiguousarray(X, dtype=np.float64)
         y = np.ascontiguousarray(y, dtype=np.float64)
-        np.random.seed(self.graine)
+        rng = np.random.RandomState(self.graine)
 
         n, p = X.shape
         k = self.n_features_par_split or max(1, p // 3)
-        self.arbres_ = []
 
+        bootstraps = []
         for _ in range(self.n_arbres):
-            idx    = np.random.randint(0, n, size=n)
+            idx    = rng.randint(0, n, size=n)
             X_boot = np.ascontiguousarray(X[idx])
             y_boot = np.ascontiguousarray(y[idx])
-            self.arbres_.append(
-                _construire_arbre_regress(X_boot, y_boot, self.profondeur_max, k)
-            )
+            seed   = int(rng.randint(0, 2**31))
+            bootstraps.append((X_boot, y_boot, seed))
+
+        self.arbres_ = Parallel(n_jobs=self.n_jobs, backend='loky')(
+            delayed(_build_tree_regress)(Xb, yb, self.profondeur_max, k, s)
+            for Xb, yb, s in bootstraps
+        )
         return self
 
     def predict(self, X):
@@ -281,31 +305,3 @@ class RandomForestRegresseurCython:
         ss_res = np.sum((preds - y) ** 2)
         ss_tot = np.sum((y - y.mean()) ** 2)
         return float(1.0 - ss_res / ss_tot) if ss_tot > 0 else 0.0
-
-
-# ===========================================================================
-# Test rapide
-# ===========================================================================
-
-if __name__ == "__main__":
-    rng = np.random.RandomState(0)
-    n   = 200
-
-    # --- Classification ---
-    X   = rng.randn(n, 6).astype(np.float64)
-    y_c = ((X[:, 0] + X[:, 1]) > 0).astype(np.int64)
-
-    print("=== Classification Cython ===")
-    t0 = time.perf_counter()
-    clf = RandomForestClassifieurCython(n_arbres=15, profondeur_max=5)
-    clf.fit(X, y_c)
-    print(f"  Temps : {time.perf_counter()-t0:.3f}s | Accuracy : {clf.score(X, y_c):.3f}")
-
-    # --- Régression ---
-    y_r = (2 * X[:, 0] + X[:, 1] + rng.randn(n) * 0.5).astype(np.float64)
-
-    print("=== Régression Cython ===")
-    t0 = time.perf_counter()
-    reg = RandomForestRegresseurCython(n_arbres=15, profondeur_max=5)
-    reg.fit(X, y_r)
-    print(f"  Temps : {time.perf_counter()-t0:.3f}s | R²     : {reg.score(X, y_r):.3f}")

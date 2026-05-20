@@ -1,15 +1,15 @@
 """
 naive.py
 --------
-Implémentation NAÏVE d'une Random Forest en Python pur.
+Implémentation naïve d'une Random Forest séquentielle 
 
 Deux classes sont disponibles :
   - RandomForestClassifieurNaif  : classification (vote majoritaire, critère Gini)
   - RandomForestRegresseurNaif   : régression     (moyenne des feuilles, critère MSE)
 
 Aucune parallélisation, aucune dépendance NumPy :
-tout repose sur des listes Python et des boucles for.
-C'est le point de référence pour mesurer le gain de la version Cython.
+tout repose sur des listes Python et des boucles for
+C'est le point de référence pour mesurer le gain de la version Cython
 """
 
 import math
@@ -37,7 +37,7 @@ class Noeud:
 
 
 # ===========================================================================
-# Fonctions utilitaires partagées
+# Fonctions partagées
 # ===========================================================================
 
 def _predire_un_exemple(noeud, x):
@@ -56,8 +56,8 @@ def _predire_un_exemple(noeud, x):
 
 def _gini(y):
     """
-    Impureté de Gini d'une liste d'étiquettes.
-    Gini = 1 - sum(p_k^2)  → 0 si nœud pur, ~0.5 si nœud impur.
+    Impureté de Gini d'une liste d'étiquettes y 
+    Gini = 1 - sum(p_k^2)  = 0 si nœud pur, ~0.5 si nœud impur
     """
     n = len(y)
     if n == 0:
@@ -69,7 +69,7 @@ def _gini(y):
 def _meilleure_coupure_classif(X, y, indices_features):
     """
     Parcourt tous les seuils possibles pour chaque feature tirée,
-    et retourne la coupure qui maximise le gain de Gini.
+    et retourne la coupure qui maximise le gain de Gini
     """
     n = len(y)
     meilleur_gain  = -1.0
@@ -223,12 +223,12 @@ def _construire_arbre_regress(X, y, profondeur_max, k, profondeur=0):
 
 class RandomForestClassifieurNaif:
     """
-    Random Forest de CLASSIFICATION en Python pur.
+    Random Forest de classification 
 
-    Critère de coupure : impureté de Gini.
-    Agrégation          : vote majoritaire entre les T arbres.
-    Structures          : listes Python (pas NumPy).
-    Parallélisation     : aucune (boucle for séquentielle).
+    Critère de coupure : impureté de Gini
+    Agrégation          : vote majoritaire entre les T arbres
+    Structures          : listes Python
+    Parallélisation     : aucune (boucle for séquentielle)
     """
 
     def __init__(self, n_arbres=10, profondeur_max=5,
@@ -241,8 +241,8 @@ class RandomForestClassifieurNaif:
 
     def fit(self, X, y):
         """
-        Entraîne la forêt sur X (liste de listes) et y (liste d'entiers).
-        Chaque arbre est construit sur un bootstrap de X, y.
+        Entraîne la forêt sur X (liste de listes) et y (liste d'entiers)
+        Chaque arbre est construit sur un bootstrap de X, y
         """
         random.seed(self.graine)
         n       = len(y)
@@ -261,7 +261,7 @@ class RandomForestClassifieurNaif:
         return self
 
     def predict(self, X):
-        """Retourne la classe prédite pour chaque exemple (vote majoritaire)."""
+        """Retourne la classe prédite pour chaque exemple"""
         predictions = []
         for x in X:
             votes = [_predire_un_exemple(a, x) for a in self.arbres_]
@@ -292,18 +292,18 @@ class RandomForestRegresseurNaif:
                  n_features_par_split=None, graine=42):
         self.n_arbres            = n_arbres
         self.profondeur_max      = profondeur_max
-        self.n_features_par_split = n_features_par_split  # None → p/3 (convention régression)
+        self.n_features_par_split = n_features_par_split  # None → p/3 
         self.graine              = graine
         self.arbres_             = []
 
     def fit(self, X, y):
         """
-        Entraîne la forêt sur X (liste de listes) et y (liste de floats).
+        Entraîne la forêt sur X  et y 
         """
         random.seed(self.graine)
         n       = len(y)
         p       = len(X[0])
-        # Convention régression : p/3 features par nœud (comme sklearn)
+        # Convention régression : p/3 features par nœud 
         k       = self.n_features_par_split or max(1, p // 3)
         self.arbres_ = []
 
@@ -332,30 +332,3 @@ class RandomForestRegresseurNaif:
         ss_tot = sum((v - y_moy) ** 2 for v in y)
         return 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
 
-
-# ===========================================================================
-# Test rapide
-# ===========================================================================
-
-if __name__ == "__main__":
-    random.seed(0)
-    n = 200
-
-    # --- Classification ---
-    X = [[random.gauss(0, 1) for _ in range(6)] for _ in range(n)]
-    y_c = [1 if x[0] + x[1] > 0 else 0 for x in X]
-
-    print("=== Classification naïve ===")
-    t0 = time.perf_counter()
-    clf = RandomForestClassifieurNaif(n_arbres=15, profondeur_max=5)
-    clf.fit(X, y_c)
-    print(f"  Temps : {time.perf_counter()-t0:.3f}s | Accuracy : {clf.score(X, y_c):.3f}")
-
-    # --- Régression ---
-    y_r = [x[0] * 2 + x[1] + random.gauss(0, 0.5) for x in X]
-
-    print("=== Régression naïve ===")
-    t0 = time.perf_counter()
-    reg = RandomForestRegresseurNaif(n_arbres=15, profondeur_max=5)
-    reg.fit(X, y_r)
-    print(f"  Temps : {time.perf_counter()-t0:.3f}s | R²     : {reg.score(X, y_r):.3f}")

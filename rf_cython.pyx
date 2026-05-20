@@ -1,14 +1,13 @@
 # rf_cython.pyx
 # -------------
-# Fonctions Cython compilées en C pour la Random Forest.
+# Fonctions Cython compilées en C pour la Random Forest
 #
 # Ce fichier contient 4 fonctions critiques :
 #   - gini_cython              : impureté de Gini (classification)
 #   - meilleure_coupure_classif: meilleur seuil de coupure (classification)
 #   - mse_cython               : MSE d'un nœud (régression)
 #   - meilleure_coupure_regress: meilleur seuil de coupure (régression)
-#
-# RÈGLE CYTHON : tous les "cdef" doivent être déclarés EN HAUT de la fonction.
+
 
 import numpy as np
 cimport numpy as np
@@ -22,7 +21,7 @@ def gini_cython(np.int64_t[:] y):
     """
     Calcule l'impureté de Gini d'un tableau d'étiquettes entières.
     Gini = 1 - sum(p_k^2)
-    Retourne 0.0 pour un nœud pur, ~0.5 pour un nœud impur.
+    Retourne 0.0 pour un nœud pur, ~0.5 pour un nœud impur
     """
     cdef int n = y.shape[0]
     cdef int i
