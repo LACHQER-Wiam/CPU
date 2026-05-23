@@ -6,55 +6,128 @@ L'objectif est d'implémenter un algorithme de Random Forest en plusieurs versio
 
 ---
 
-## Contenu du projet
+## Structure du projet
 
 ```
 .
-├── naive.py                  # Version naïve (Python pur)
+├── naive.py                  # Version naïve (Python pur, séquentiel)
 ├── rf_cython.pyx             # Fonctions critiques compilées en C (Cython)
+├── rf_cython.c               # Code C généré automatiquement par Cython (ne pas modifier)
 ├── setup.py                  # Script de compilation du module Cython
-├── optimised_cython.py       # Random Forest utilisant le module Cython
+├── optimised_cython.py       # Random Forest utilisant Cython + parallélisation joblib
 ├── benchmark_complet.ipynb   # Notebook de comparaison des versions
 ├── requirements.txt          # Dépendances Python du projet
 └── README.md                 # Ce fichier
 ```
 
+---
+
+## Description des fichiers et fonctions
+
 ### `naive.py`
 
-Implémentation **séquentielle en Python pur** d'une Random Forest pour la classification et la régression. Aucune parallélisation, aucune dépendance à NumPy : les données sont stockées dans des listes Python classiques. Ce fichier sert de référence de base pour mesurer les gains des versions optimisées. Il illustre le goulot d'étranglement de l'interpréteur Python sur des boucles intensives (calcul du Gini, recherche de coupure).
+Implémentation **séquentielle en Python pur** d'une Random Forest. Aucune dépendance à NumPy : les données circulent sous forme de listes Python classiques. Sert de baseline pour mesurer les gains des versions optimisées.
 
-Classes exposées : `RandomForestClassifieurNaif`, `RandomForestRegresseurNaif`
+**Fonctions internes (classification)**
+
+| Fonction | Rôle |
+|---|---|
+| `_gini(y)` | Calcule l'impureté de Gini d'une liste d'étiquettes : `1 - Σ pₖ²` |
+| `_meilleure_coupure_classif(X, y, indices_features)` | Parcourt tous les seuils candidats sur les features tirées et retourne la coupure qui maximise le gain de Gini |
+| `_construire_arbre_classif(X, y, profondeur_max, k)` | Construit récursivement un arbre de décision par partitionnement Gini |
+
+**Fonctions internes (régression)**
+
+| Fonction | Rôle |
+|---|---|
+| `_mse(y)` | Calcule la MSE (variance) d'une liste de valeurs réelles |
+| `_meilleure_coupure_regress(X, y, indices_features)` | Même principe que la classification, mais minimise la MSE pondérée des enfants |
+| `_construire_arbre_regress(X, y, profondeur_max, k)` | Construit récursivement un arbre de régression |
+
+**Fonction partagée**
+
+| Fonction | Rôle |
+|---|---|
+| `_predire_un_exemple(noeud, x)` | Descend un exemple dans l'arbre en suivant les règles de coupure jusqu'à une feuille |
+
+**Classes exposées**
+
+| Classe | Tâche | Agrégation | Features par nœud |
+|---|---|---|---|
+| `RandomForestClassifieurNaif` | Classification | Vote majoritaire | `sqrt(p)` |
+| `RandomForestRegresseurNaif` | Régression | Moyenne | `p / 3` |
+
+---
 
 ### `rf_cython.pyx`
 
-Fichier source **Cython** contenant les deux fonctions les plus coûteuses de l'algorithme, réécrites en C typé :
+Réécriture en **C typé** des 4 fonctions qui concentrent l'essentiel du temps de calcul. Utilise des `cdef`, des memoryviews NumPy (`np.float64_t[:]`, `np.int64_t[:]`) et des variables locales typées pour éliminer le passage par l'interpréteur Python.
 
-- `gini_cython` : calcul de l'impureté de Gini avec des variables `cdef` et des memoryviews NumPy, sans passer par l'interpréteur Python.
-- `meilleure_coupure_cython` : boucle de recherche du meilleur seuil de coupure, compilée en C. C'est ici que se concentre l'essentiel du temps de calcul.
+| Fonction | Rôle |
+|---|---|
+| `gini_cython(y)` | Calcul de l'impureté de Gini sur un memoryview `int64` |
+| `meilleure_coupure_classif(feature_vals, y, gini_parent)` | Recherche du meilleur seuil sur une feature pour la classification |
+| `mse_cython(y)` | Calcul de la MSE sur un memoryview `float64` |
+| `meilleure_coupure_regress(feature_vals, y, mse_parent)` | Recherche du meilleur seuil sur une feature pour la régression |
 
-Ce fichier doit être **compilé** avant utilisation avec la commande décrite ci-dessous.
+> Ce fichier doit être **compilé** avant utilisation (voir section Installation).
+
+---
 
 ### `setup.py`
 
-Script de compilation du module Cython. Il utilise `setuptools` et `Cython.Build.cythonize` pour transformer `rf_cython.pyx` en un fichier `.so` importable directement par Python. Les directives `boundscheck=False` et `wraparound=False` sont activées pour maximiser la vitesse du code compilé.
+Script de compilation Cython. Transforme `rf_cython.pyx` → `rf_cython.c` → `rf_cython.so` (`.pyd` sur Windows) via `setuptools` et `Cython.Build.cythonize`. Les directives `boundscheck=False` et `wraparound=False` désactivent les vérifications de bornes pour maximiser la vitesse.
+
+---
 
 ### `optimised_cython.py`
 
-Random Forest qui **appelle le module Cython compilé** pour les fonctions critiques, couvrant les tâches de classification et de régression :
+Random Forest qui **appelle les fonctions Cython compilées** pour les calculs critiques, et **parallélise la construction des arbres** avec `joblib.Parallel` (backend `loky`, processus séparés — contourne le GIL).
 
-- `RandomForestClassifieurCython` : classifieur avec les fonctions Cython. Permet d'isoler le gain apporté par la compilation C, indépendamment du parallélisme.
-- `RandomForestRegresseurCython` : régresseur avec les fonctions Cython.
+**Fonctions internes**
+
+| Fonction | Rôle |
+|---|---|
+| `_construire_arbre_classif(X, y, profondeur_max, k)` | Construction d'un arbre de classification avec appels Cython pour Gini et coupure |
+| `_construire_arbre_regress(X, y, profondeur_max, k)` | Construction d'un arbre de régression avec appels Cython pour MSE et coupure |
+| `_build_tree_classif(X_boot, y_boot, profondeur_max, k, seed)` | Wrapper top-level (picklable) appelé par joblib pour la classification |
+| `_build_tree_regress(X_boot, y_boot, profondeur_max, k, seed)` | Wrapper top-level (picklable) appelé par joblib pour la régression |
+| `_predire_un_exemple(noeud, x)` | Descente dans l'arbre, identique à la version naïve |
+
+**Classes exposées**
+
+| Classe | Tâche | Agrégation | Parallélisation |
+|---|---|---|---|
+| `RandomForestClassifieurCython` | Classification | Vote majoritaire | `joblib.Parallel(n_jobs=-1)` |
+| `RandomForestRegresseurCython` | Régression | Moyenne | `joblib.Parallel(n_jobs=-1)` |
+
+Paramètre `n_jobs=-1` par défaut : utilise tous les cœurs disponibles.
+
+---
 
 ### `benchmark_complet.ipynb`
 
-Notebook Jupyter de comparaison des **3 versions** (Naïve, Cython, Sklearn) sur **4 datasets** couvrant classification et régression. Il contient :
+Notebook Jupyter de comparaison des **3 versions** (Naïve, Cython+joblib, Sklearn) sur **4 datasets**, avec variation du nombre d'arbres.
 
-- La compilation automatique du module Cython au démarrage
-- La visualisation des 4 datasets
-- Un benchmark sur 5 runs (20 arbres, profondeur 5) pour chaque dataset :
-  - **Classification** : Moons (synthétique, 600 points) et Breast Cancer (569 patients, 30 features)
-  - **Régression** : Sinusoïde bruitée (synthétique, 400 points) et California Housing (2 000 maisons, 8 features)
-- Des graphiques détaillés : frontières de décision, matrices de confusion, courbes prédites, scatter prédit vs réel, barres de temps, barres de speedup, boxplots de variabilité
+| Cellule | Contenu |
+|---|---|
+| 1 | Compilation automatique du module Cython |
+| 2 | Imports + paramètres (`N_RUNS=10`, `TREES_LIST=[5, 15, 25]`, `DEPTH=5`) |
+| 3 | Chargement des 4 datasets |
+| 4 | Fonction `run_benchmark` + définition des datasets |
+| 5 | Exécution du benchmark (boucle sur les 3 valeurs de `TREES_LIST`) |
+| 6 | Histogrammes des temps moyens — grille 3 × 4 (lignes = nb arbres, colonnes = datasets) |
+| 7 | Tableau récapitulatif (temps, std, accuracy/R², speedup vs Naïve) |
+| 8 | Graphique de speedup — Cython+joblib et Sklearn vs Naïve |
+
+**Datasets utilisés**
+
+| Dataset | Tâche | Taille |
+|---|---|---|
+| Moons (synthétique) | Classification | 600 points, 2 features |
+| Breast Cancer | Classification | 569 patients, 30 features |
+| Sinusoïde bruitée (synthétique) | Régression | 400 points, 1 feature |
+| California Housing | Régression | 2 000 maisons, 8 features |
 
 ---
 
