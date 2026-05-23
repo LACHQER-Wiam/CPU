@@ -25,9 +25,9 @@ from joblib import Parallel, delayed
 import rf_cython
 
 
-# ===========================================================================
-# Structure commune : un nœud d'arbre
-# ===========================================================================
+
+### Structure commune : un nœud d'arbre
+
 
 class Noeud:
     """Nœud d'un arbre de décision"""
@@ -40,9 +40,9 @@ class Noeud:
         self.droite      = None
 
 
-# ===========================================================================
-# Fonction de prédiction commune
-# ===========================================================================
+
+### Fonction de prédiction commune
+
 
 def _predire_un_exemple(noeud, x):
     """Descend dans l'arbre et retourne la valeur de la feuille"""
@@ -54,9 +54,9 @@ def _predire_un_exemple(noeud, x):
         return _predire_un_exemple(noeud.droite, x)
 
 
-# ===========================================================================
-# CLASSIFICATION — construction de l'arbre (utilise Cython pour Gini + seuil)
-# ===========================================================================
+
+### CLASSIFICATION, construction de l'arbre (utilise Cython pour Gini + seuil)
+
 
 def _construire_arbre_classif(X, y, profondeur_max, k, profondeur=0):
     """
@@ -113,9 +113,9 @@ def _construire_arbre_classif(X, y, profondeur_max, k, profondeur=0):
     return noeud
 
 
-# ===========================================================================
-# RÉGRESSION — construction de l'arbre (utilise Cython pour MSE + seuil)
-# ===========================================================================
+
+### RÉGRESSION, construction de l'arbre (utilise Cython pour MSE + seuil)
+
 
 def _construire_arbre_regress(X, y, profondeur_max, k, profondeur=0):
     """
@@ -168,9 +168,9 @@ def _construire_arbre_regress(X, y, profondeur_max, k, profondeur=0):
     return noeud
 
 
-# ===========================================================================
-# Helpers top-level pour joblib
-# ===========================================================================
+
+### Helpers top-level pour joblib
+
 
 def _build_tree_classif(X_boot, y_boot, profondeur_max, k, seed):
     np.random.seed(seed)
@@ -182,9 +182,9 @@ def _build_tree_regress(X_boot, y_boot, profondeur_max, k, seed):
     return _construire_arbre_regress(X_boot, y_boot, profondeur_max, k)
 
 
-# ===========================================================================
-# Classe publique — Classification Cython
-# ===========================================================================
+
+### Classe publique, Classification Cython
+
 
 class RandomForestClassifieurCython:
     """
@@ -193,7 +193,7 @@ class RandomForestClassifieurCython:
     Critère de coupure : Gini compilé en C (rf_cython.gini_cython)
     Agrégation          : vote majoritaire entre les T arbres
     Structures          : tableaux NumPy (mémoire contiguë)
-    Parallélisation     : aucune — on isole le gain Cython pur
+    Parallélisation     : aucune, on isole le gain Cython pur
     """
 
     def __init__(self, n_arbres=10, profondeur_max=5,
@@ -243,9 +243,9 @@ class RandomForestClassifieurCython:
         return np.mean(np.array(preds) == np.array(y))
 
 
-# ===========================================================================
-# Classe publique — Régression Cython
-# ===========================================================================
+
+### Classe publique, Régression Cython
+
 
 class RandomForestRegresseurCython:
     """
@@ -254,7 +254,7 @@ class RandomForestRegresseurCython:
     Critère de coupure : réduction de MSE compilée en C (rf_cython.mse_cython).
     Agrégation          : moyenne des prédictions des T arbres.
     Structures          : tableaux NumPy (mémoire contiguë).
-    Parallélisation     : aucune — on isole le gain Cython pur.
+    Parallélisation     : aucune, on isole le gain Cython pur.
     """
 
     def __init__(self, n_arbres=10, profondeur_max=5,

@@ -18,9 +18,9 @@ import time
 from collections import Counter
 
 
-# ===========================================================================
-# Structure commune : un nœud d'arbre
-# ===========================================================================
+
+### Structure commune : un nœud d'arbre
+
 
 class Noeud:
     """
@@ -36,9 +36,9 @@ class Noeud:
         self.droite         = None   # sous-arbre droit   (feature >  seuil)
 
 
-# ===========================================================================
-# Fonctions partagées
-# ===========================================================================
+
+### Fonctions partagées
+
 
 def _predire_un_exemple(noeud, x):
     """Fait descendre l'exemple x dans l'arbre et retourne la valeur de la feuille."""
@@ -50,9 +50,9 @@ def _predire_un_exemple(noeud, x):
         return _predire_un_exemple(noeud.droite, x)
 
 
-# ===========================================================================
-# CLASSIFICATION — fonctions internes
-# ===========================================================================
+
+### CLASSIFICATION — fonctions internes
+
 
 def _gini(y):
     """
@@ -134,9 +134,9 @@ def _construire_arbre_classif(X, y, profondeur_max, k, profondeur=0):
     return noeud
 
 
-# ===========================================================================
-# RÉGRESSION — fonctions internes
-# ===========================================================================
+
+### RÉGRESSION — fonctions internes
+
 
 def _mse(y):
     """
@@ -217,9 +217,9 @@ def _construire_arbre_regress(X, y, profondeur_max, k, profondeur=0):
     return noeud
 
 
-# ===========================================================================
-# Classe publique — Classification naïve
-# ===========================================================================
+
+### Classe publique — Classification naïve
+
 
 class RandomForestClassifieurNaif:
     """
@@ -274,9 +274,9 @@ class RandomForestClassifieurNaif:
         return sum(p == v for p, v in zip(preds, y)) / len(y)
 
 
-# ===========================================================================
-# Classe publique — Régression naïve
-# ===========================================================================
+
+### Classe publique — Régression naïve
+
 
 class RandomForestRegresseurNaif:
     """

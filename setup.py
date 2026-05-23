@@ -1,6 +1,6 @@
 # setup.py
 # --------
-# Script de compilation du fichier Cython rf_cython.pyx → rf_cython.so
+# Script de compilation du fichier Cython rf_cython.pyx :  rf_cython.so
 #
 # Usage (ligne de commande) :
 #   python setup.py build_ext --inplace
